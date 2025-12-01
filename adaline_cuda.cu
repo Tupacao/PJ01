@@ -161,8 +161,8 @@ int main(int argc, char **argv)
     if (argc >= 5)
         blocksize = atoi(argv[4]);
 
-    printf("ADALINE CUDA optimized: n_samples=%d n_features=%d epochs=%d blocksize=%d\n",
-           n_samples, n_features, epochs, blocksize);
+    // printf("ADALINE CUDA optimized: n_samples=%d n_features=%d epochs=%d blocksize=%d\n",
+    //        n_samples, n_features, epochs, blocksize);
 
     /* allocate host matrix pointers (row pointers) */
     float **X = (float **)malloc(n_samples * sizeof(float *));
@@ -245,11 +245,12 @@ int main(int argc, char **argv)
 
         /* monitoring */
         float mse = host_mse(weights, bias, X, y, n_samples, n_features);
-        printf("Epoch %d MSE=%.6f\n", e + 1, mse);
+        // printf("Epoch %d MSE=%.6f\n", e + 1, mse);
     }
-    clock_t t1 = clock();
-    double elapsed = (double)(t1 - t0) / CLOCKS_PER_SEC;
-    printf("Tempo total (s): %.4f\n", elapsed);
+
+    // clock_t t1 = clock();
+    // double elapsed = (double)(t1 - t0) / CLOCKS_PER_SEC;
+    // printf("Tempo total (s): %.4f\n", elapsed);
 
     /* cleanup */
     cudaFree(d_X);
