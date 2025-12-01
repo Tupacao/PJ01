@@ -1,4 +1,4 @@
-Trabalho de Paralelização – ADALINE (rede neural linear)
+# Trabalho de Paralelização – ADALINE (rede neural linear)
 
 Este projeto implementa um ADALINE usando:
 - Versão sequencial em C;
