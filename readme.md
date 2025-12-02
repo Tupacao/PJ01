@@ -1,5 +1,5 @@
-Trabalho de Paralelização – ADALINE (rede neural linear)
-
+# Trabalho de Paralelização – ADALINE (rede neural linear)
+## Integrantes : Arthur Oliveira, Luis Phillip, Fernanda Rodrigues
 Este projeto implementa um ADALINE usando:
 - Versão sequencial em C;
 - Versão paralela com **OpenMP para CPU**;
