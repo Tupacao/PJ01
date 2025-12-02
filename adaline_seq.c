@@ -24,6 +24,9 @@
 
 #define MAX_LINE 1024
 #define EPOCHS 100
+
+
+
 /* Modelo ADALINE */
 typedef struct
 {
@@ -63,10 +66,11 @@ void adaline_train_epoch_sgd(Adaline *m, float **X, float *y, int n_samples)
         float pred = adaline_predict(m, X[s]);
         float err = y[s] - pred;
 
+        //coreção dos pesos
         for (int j = 0; j < m->n_inputs; j++)
             m->weights[j] += m->learning_rate * err * X[s][j];
 
-        m->bias += m->learning_rate * err;
+        m->bias += m->learning_rate * err; //correção da bias
     }
 }
 
@@ -178,6 +182,7 @@ int load_dataset(
 
     return count;
 }
+
 
 void normalize_dataset(float **X, int n_samples, int n_features)
 {

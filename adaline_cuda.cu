@@ -1,18 +1,17 @@
-/* adaline_cuda_opt.cu
+/* adaline_cuda.cu
  *
  * ADALINE - CUDA otimizado (redução por bloco em shared memory)
  *
  * Compilar:
- *   nvcc -O3 adaline_cuda_opt.cu -o adaline_cuda_opt
+ *   nvcc -O3 adaline_cuda.cu -o adaline_cuda
  *
  * Uso:
- *   ./adaline_cuda_opt [n_samples] [n_features] [epochs] [blocksize]
+ *   ./adaline_cuda [dataset.csv] [epochs] [blocksize]
  *
  * Observações:
- * - Este kernel faz redução por bloco em memória compartilhada para diminuir
- *   atomicAdd globais (melhora desempenho).
- * - Se n_features for muito grande, aumente blocksize para amortizar trabalho por bloco.
- * - Se usar dataset real, substitua generate_data_host por load_dataset e linearize.
+ * - Lê o mesmo CSV das versões seq/OMP (./data/synthetic_employee_burnout.csv).
+ * - Kernel faz redução por bloco em shared para diminuir atomicAdd globais.
+ * - Ajuste blocksize conforme a GPU (padrão 256).
  */
 
 #include <stdio.h>
@@ -22,40 +21,143 @@
 #include <time.h>
 #include <cuda_runtime.h>
 
-#define CHECKCALL(x)                                                                              \
-    do                                                                                            \
-    {                                                                                             \
-        cudaError_t e = (x);                                                                      \
-        if (e != cudaSuccess)                                                                     \
-        {                                                                                         \
-            fprintf(stderr, "CUDA err %s at %s:%d\n", cudaGetErrorString(e), __FILE__, __LINE__); \
-            exit(1);                                                                              \
-        }                                                                                         \
-    } while (0)
+
+
 
 #define MAX_LINE 1024
 
-/* --------------------
-   Helpers / Data gen
-   -------------------- */
-
-void generate_data_host(float **X, float *y, int n_samples, int n_features)
+/* Carrega dataset burnout (mesmo formato das versões seq/OMP) */
+int load_dataset(const char *filename, float ***X_out, float **y_out, int *n_features)
 {
-    srand(42);
-    float *true_w = (float *)malloc(n_features * sizeof(float));
-    for (int j = 0; j < n_features; j++)
-        true_w[j] = ((float)rand() / RAND_MAX) * 2 - 1;
-
-    for (int i = 0; i < n_samples; i++)
+    FILE *f = fopen(filename, "r");
+    if (!f)
     {
-        for (int j = 0; j < n_features; j++)
-            X[i][j] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
-        float s = 0.0f;
-        for (int j = 0; j < n_features; j++)
-            s += true_w[j] * X[i][j];
-        y[i] = s + (((float)rand() / RAND_MAX) - 0.5f) * 0.1f;
+        fprintf(stderr, "Erro ao abrir CSV: %s\n", filename);
+        exit(1);
     }
-    free(true_w);
+
+    char line[MAX_LINE];
+    int count = 0;
+
+    if (!fgets(line, MAX_LINE, f)) // header
+    {
+        fprintf(stderr, "CSV vazio ou corrompido: %s\n", filename);
+        fclose(f);
+        exit(1);
+    }
+    while (fgets(line, MAX_LINE, f))
+        count++;
+
+    rewind(f);
+    if (!fgets(line, MAX_LINE, f)) // header novamente
+    {
+        fprintf(stderr, "CSV vazio ou corrompido: %s\n", filename);
+        fclose(f);
+        exit(1);
+    }
+
+    *n_features = 7;
+    float **X = (float **)malloc(count * sizeof(float *));
+    float *y = (float *)malloc(count * sizeof(float));
+    if (!X || !y)
+    {
+        fprintf(stderr, "malloc fail\n");
+        exit(1);
+    }
+
+    int idx = 0;
+    while (fgets(line, MAX_LINE, f))
+    {
+        char *token = strtok(line, ",");
+
+        char name[64];
+        char gender_str[16];
+        char jobrole[32];
+        float Age, Experience, WorkHours, RemoteRatio, Sat, Stress;
+        int Gender, Burnout;
+
+        if (!token)
+            continue;
+        strncpy(name, token, sizeof(name));
+        name[sizeof(name) - 1] = 0;
+
+        token = strtok(NULL, ",");
+        Age = token ? atof(token) : 0.0f;
+
+        token = strtok(NULL, ",");
+        strncpy(gender_str, token ? token : "", sizeof(gender_str));
+        gender_str[sizeof(gender_str) - 1] = 0;
+
+        token = strtok(NULL, ",");
+        strncpy(jobrole, token ? token : "", sizeof(jobrole));
+        jobrole[sizeof(jobrole) - 1] = 0;
+
+        token = strtok(NULL, ",");
+        Experience = token ? atof(token) : 0.0f;
+
+        token = strtok(NULL, ",");
+        WorkHours = token ? atof(token) : 0.0f;
+
+        token = strtok(NULL, ",");
+        RemoteRatio = token ? atof(token) : 0.0f;
+
+        token = strtok(NULL, ",");
+        Sat = token ? atof(token) : 0.0f;
+
+        token = strtok(NULL, ",");
+        Stress = token ? atof(token) : 0.0f;
+
+        token = strtok(NULL, ",");
+        Burnout = token ? atoi(token) : 0;
+
+        Gender = (strcmp(gender_str, "Male") == 0) ? 0 : 1;
+
+        X[idx] = (float *)malloc((*n_features) * sizeof(float));
+        if (!X[idx])
+        {
+            fprintf(stderr, "malloc fail\n");
+            exit(1);
+        }
+        X[idx][0] = Age;
+        X[idx][1] = (float)Gender;
+        X[idx][2] = Experience;
+        X[idx][3] = WorkHours;
+        X[idx][4] = RemoteRatio;
+        X[idx][5] = Sat;
+        X[idx][6] = Stress;
+
+        y[idx] = (float)Burnout;
+        idx++;
+    }
+
+    fclose(f);
+    *X_out = X;
+    *y_out = y;
+    return idx;
+}
+
+void normalize_dataset(float **X, int n_samples, int n_features)
+{
+    for (int j = 0; j < n_features; j++)
+    {
+        float minv = X[0][j];
+        float maxv = X[0][j];
+
+        for (int i = 1; i < n_samples; i++)
+        {
+            if (X[i][j] < minv)
+                minv = X[i][j];
+            if (X[i][j] > maxv)
+                maxv = X[i][j];
+        }
+
+        float range = maxv - minv;
+        if (range < 1e-6f)
+            range = 1.0f;
+
+        for (int i = 0; i < n_samples; i++)
+            X[i][j] = (X[i][j] - minv) / range;
+    }
 }
 
 /* host MSE (for monitoring) */
@@ -73,49 +175,38 @@ float host_mse(const float *weights, float bias, float **X, float *y, int n_samp
     return (float)(sum / n_samples);
 }
 
-/* --------------------
-   CUDA kernel
-   - cada thread processa 1 amostra
-   - cada bloco possui um buffer shared s_grad_w[ n_features ]
-   - threads do bloco acumulam em s_grad_w (usando atomicAdd sobre shared)
-   - depois um único thread por bloco (threadIdx.x==0) faz atomicAdd global por feature
-   Nota: atomicAdd sobre shared é suportado e é rápido; reduzimos global atomics a (#blocks * n_features)
-   em vez de (n_samples * n_features).
-   -------------------- */
-
-/* Kernel: cada thread processa 1 amostra; redução por bloco em shared memory.
-   shared memory size = n_features * sizeof(float)  -> passado dinamicamente no launch. */
+//executado em GPU
 __global__ void compute_contribs_block_kernel(const float *X_lin, const float *y,
                                               const float *d_weights, float bias,
                                               float *d_grad_w, float *d_grad_b,
                                               int n_samples, int n_features)
 {
-    extern __shared__ float s_grad[]; // size = n_features floats per block, mapped dynamically
-    float *s_grad_w = s_grad;         // shared gradient per feature for this block
-    // we also use one shared float for bias accumulation
-    float *s_grad_b = (float *)(s_grad + n_features); // place bias after features (ensure shared size >= (n_features+1)*4)
+    extern __shared__ float s_grad[];
+    
+    float *s_grad_w = s_grad;        
 
-    // initialize shared buffer to zero in parallel: each thread handles a strided set of indices
+    float *s_grad_b = (float *)(s_grad + n_features);
+
     for (int j = threadIdx.x; j < n_features; j += blockDim.x)
-        s_grad_w[j] = 0.0f;
+        s_grad_w[j] = 0.0f; //zerando gradiente dos pesos
 
     if (threadIdx.x == 0)
-        *s_grad_b = 0.0f;
-    __syncthreads();
+        *s_grad_b = 0.0f; //zera bias
+    __syncthreads(); //aguarda todas
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n_samples)
     {
+        // acessa região do bloco
         const float *x = X_lin + (size_t)idx * n_features;
-        // compute prediction
+        
         float pred = bias;
-        // unrolling could help, but keep simple and generic
+
         for (int j = 0; j < n_features; j++)
             pred += d_weights[j] * x[j];
+
         float err = y[idx] - pred;
 
-        // accumulate into shared arrays - use atomicAdd on shared memory
-        // each thread will do n_features atomic ops in shared mem (fast)
         atomicAdd(s_grad_b, err);
         for (int j = 0; j < n_features; j++)
         {
@@ -124,14 +215,11 @@ __global__ void compute_contribs_block_kernel(const float *X_lin, const float *y
         }
     }
 
-    __syncthreads();
+    __syncthreads(); //sincroniza
 
-    // now thread 0 of block will add s_grad_w to global arrays (one atomic per feature per block)
     if (threadIdx.x == 0)
     {
-        // accumulate bias
         atomicAdd(d_grad_b, *s_grad_b);
-        // accumulate per-feature gradient to global memory
         for (int j = 0; j < n_features; j++)
         {
             float val = s_grad_w[j];
@@ -141,99 +229,70 @@ __global__ void compute_contribs_block_kernel(const float *X_lin, const float *y
     }
 }
 
-/* --------------------
-   Main (host)
-   -------------------- */
 
-int main(int argc, char **argv)
+int main()
 {
-    int n_samples = 200000; // default
-    int n_features = 128;
+    const char *dataset_path = "./data/synthetic_employee_burnout.csv";
     int epochs = 20;
-    int blocksize = 256;
+    int blocksize = 256; 
 
-    if (argc >= 2)
-        n_samples = atoi(argv[1]);
-    if (argc >= 3)
-        n_features = atoi(argv[2]);
-    if (argc >= 4)
-        epochs = atoi(argv[3]);
-    if (argc >= 5)
-        blocksize = atoi(argv[4]);
+    float **X = NULL;
+    float *y = NULL;
+    int n_features = 0;
+    int n_samples = load_dataset(dataset_path, &X, &y, &n_features);
 
-    // printf("ADALINE CUDA optimized: n_samples=%d n_features=%d epochs=%d blocksize=%d\n",
-    //        n_samples, n_features, epochs, blocksize);
+    normalize_dataset(X, n_samples, n_features);
 
-    /* allocate host matrix pointers (row pointers) */
-    float **X = (float **)malloc(n_samples * sizeof(float *));
-    for (int i = 0; i < n_samples; i++)
-        X[i] = (float *)malloc(n_features * sizeof(float));
-    float *y = (float *)malloc(n_samples * sizeof(float));
-
-    /* generate synthetic data (or load dataset) */
-    generate_data_host(X, y, n_samples, n_features);
-    // If you prefer to load CSV, call your load_dataset(...) here and then normalize.
-
-    /* linearize X into contiguous buffer for device transfer */
+    /* lineariza X  */
     size_t X_bytes = (size_t)n_samples * n_features * sizeof(float);
     float *X_lin = (float *)malloc(X_bytes);
-    if (!X_lin)
-    {
-        fprintf(stderr, "malloc X_lin failed\n");
-        return 1;
-    }
     for (int i = 0; i < n_samples; i++)
         memcpy(X_lin + (size_t)i * n_features, X[i], n_features * sizeof(float));
 
-    /* init weights on host */
+    /* init weights no host */
     float *weights = (float *)malloc(n_features * sizeof(float));
     srand(1234);
     for (int j = 0; j < n_features; j++)
         weights[j] = ((float)rand() / RAND_MAX) * 0.01f;
     float bias = 0.0f;
-    float lr = 0.05f;
+    float lr = 0.000001f; 
 
     /* device buffers */
     float *d_X = NULL, *d_y = NULL, *d_weights = NULL, *d_grad_w = NULL, *d_grad_b = NULL;
-    CHECKCALL(cudaMalloc((void **)&d_X, X_bytes));
-    CHECKCALL(cudaMalloc((void **)&d_y, (size_t)n_samples * sizeof(float)));
-    CHECKCALL(cudaMalloc((void **)&d_weights, (size_t)n_features * sizeof(float)));
-    CHECKCALL(cudaMalloc((void **)&d_grad_w, (size_t)n_features * sizeof(float)));
-    CHECKCALL(cudaMalloc((void **)&d_grad_b, sizeof(float)));
+    cudaMalloc((void **)&d_X, X_bytes)
+    cudaMalloc((void **)&d_y, (size_t)n_samples * sizeof(float))
+    cudaMalloc((void **)&d_weights, (size_t)n_features * sizeof(float))
+    cudaMalloc((void **)&d_grad_w, (size_t)n_features * sizeof(float))
+    cudaMalloc((void **)&d_grad_b, sizeof(float))
 
-    /* copy X and y once (X doesn't change) */
-    CHECKCALL(cudaMemcpy(d_X, X_lin, X_bytes, cudaMemcpyHostToDevice));
-    CHECKCALL(cudaMemcpy(d_y, y, (size_t)n_samples * sizeof(float), cudaMemcpyHostToDevice));
+    /* copy X e y sao constantes */
+    cudaMemcpy(d_X, X_lin, X_bytes, cudaMemcpyHostToDevice)
+    cudaMemcpy(d_y, y, (size_t)n_samples * sizeof(float), cudaMemcpyHostToDevice)
 
     int nblocks = (n_samples + blocksize - 1) / blocksize;
-
-    /* shared memory size per block: (n_features + 1) * sizeof(float) */
     size_t shmem_bytes = (size_t)(n_features + 1) * sizeof(float);
-    if (shmem_bytes > 48 * 1024)
-    {
-        fprintf(stderr, "Warning: shared memory per block = %zu bytes; may exceed typical limit (48KB). Reduce n_features or switch strategy.\n", shmem_bytes);
-    }
 
-    clock_t t0 = clock();
+    float *grad_w = (float *)malloc((size_t)n_features * sizeof(float));
+   
+    float grad_b = 0.0f;
+
     for (int e = 0; e < epochs; e++)
     {
-        /* copy current weights to device */
-        CHECKCALL(cudaMemcpy(d_weights, weights, (size_t)n_features * sizeof(float), cudaMemcpyHostToDevice));
+        /* copia pesos atuais para device */
+        cudaMemcpy(d_weights, weights, (size_t)n_features * sizeof(float), cudaMemcpyHostToDevice)
 
-        /* zero global gradients on device */
-        CHECKCALL(cudaMemset(d_grad_w, 0, (size_t)n_features * sizeof(float)));
-        CHECKCALL(cudaMemset(d_grad_b, 0, sizeof(float)));
+        /* zera gradientes globais no device */
+        cudaMemset(d_grad_w, 0, (size_t)n_features * sizeof(float))
+        cudaMemset(d_grad_b, 0, sizeof(float))
 
-        /* launch kernel: each block reduces to shared, block-0 writes to global */
+        /*  acumula em shared, depois escreve em global */
         compute_contribs_block_kernel<<<nblocks, blocksize, shmem_bytes>>>(d_X, d_y, d_weights, bias, d_grad_w, d_grad_b, n_samples, n_features);
-        CHECKCALL(cudaGetLastError());
-        CHECKCALL(cudaDeviceSynchronize());
+        cudaGetLastError()
+        cudaDeviceSynchronize()
 
-        /* copy gradients back */
-        float *grad_w = (float *)malloc((size_t)n_features * sizeof(float));
-        float grad_b;
-        CHECKCALL(cudaMemcpy(grad_w, d_grad_w, (size_t)n_features * sizeof(float), cudaMemcpyDeviceToHost));
-        CHECKCALL(cudaMemcpy(&grad_b, d_grad_b, sizeof(float), cudaMemcpyDeviceToHost));
+        /* copia gradientes de volta */
+        cudaMemcpy(grad_w, d_grad_w, (size_t)n_features * sizeof(float), cudaMemcpyDeviceToHost)
+        cudaMemcpy(&grad_b, d_grad_b, sizeof(float), cudaMemcpyDeviceToHost)
 
         /* update host weights */
         float scale = lr / (float)n_samples;
@@ -241,23 +300,16 @@ int main(int argc, char **argv)
             weights[j] += scale * grad_w[j];
         bias += scale * grad_b;
 
-        free(grad_w);
-
-        /* monitoring */
         float mse = host_mse(weights, bias, X, y, n_samples, n_features);
         // printf("Epoch %d MSE=%.6f\n", e + 1, mse);
     }
 
-    // clock_t t1 = clock();
-    // double elapsed = (double)(t1 - t0) / CLOCKS_PER_SEC;
-    // printf("Tempo total (s): %.4f\n", elapsed);
-
-    /* cleanup */
     cudaFree(d_X);
     cudaFree(d_y);
     cudaFree(d_weights);
     cudaFree(d_grad_w);
     cudaFree(d_grad_b);
+    free(grad_w);
     free(weights);
     free(X_lin);
     for (int i = 0; i < n_samples; i++)

@@ -17,9 +17,9 @@
 #define MAX_LINE 1024
 #define EPOCHS 100
 
-/* ================================
+/*
       Estrutura ADALINE
-   ================================ */
+   */
 typedef struct
 {
     int n_inputs;
@@ -28,9 +28,9 @@ typedef struct
     float learning_rate;
 } Adaline;
 
-/* ================================
+/*
       Inicialização
-   ================================ */
+   */
 void adaline_init(Adaline *m, int n_inputs, float lr)
 {
     m->n_inputs = n_inputs;
@@ -43,9 +43,9 @@ void adaline_init(Adaline *m, int n_inputs, float lr)
         m->weights[i] = ((float)rand() / RAND_MAX) * 0.01f;
 }
 
-/* ================================
+/*
       Forward
-   ================================ */
+   */
 float adaline_predict(Adaline *m, const float *x)
 {
     float s = m->bias;
@@ -54,9 +54,9 @@ float adaline_predict(Adaline *m, const float *x)
     return s;
 }
 
-/* ================================
+/*
       Treinamento BATCH (estável)
-   ================================ */
+   */
 void adaline_train_epoch_batch(
     Adaline *m, float **X, float *y, int n_samples, int n_threads)
 {
@@ -99,9 +99,9 @@ void adaline_train_epoch_batch(
     free(grad_w);
 }
 
-/* ================================
+/*
       MSE
-   ================================ */
+   */
 float adaline_mse(Adaline *m, float **X, float *y, int n_samples)
 {
     double sum = 0.0;
@@ -117,9 +117,9 @@ float adaline_mse(Adaline *m, float **X, float *y, int n_samples)
     return (float)(sum / n_samples);
 }
 
-/* ================================
+/*
       Carregar dataset
-   ================================ */
+  */
 int load_dataset(const char *filename, float ***X_out, float **y_out, int *n_features)
 {
     FILE *f = fopen(filename, "r");
@@ -191,9 +191,7 @@ int load_dataset(const char *filename, float ***X_out, float **y_out, int *n_fea
     return count;
 }
 
-/* ================================
-      Normalização
-   ================================ */
+/* Normalização  */
 void normalize_dataset(float **X, int n_samples, int n_features)
 {
     for (int j = 0; j < n_features; j++)
@@ -215,9 +213,6 @@ void normalize_dataset(float **X, int n_samples, int n_features)
     }
 }
 
-/* ================================
-               MAIN
-   ================================ */
 int main()
 {
     float **X;
@@ -236,7 +231,7 @@ int main()
     Adaline model;
     adaline_init(&model, n_features, 0.000001f); // learning rate seguro
 
-    int threads = 1;
+    int threads = 32;
 
     // double t0 = omp_get_wtime();
 

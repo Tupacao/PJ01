@@ -6,7 +6,7 @@ Este projeto implementa um ADALINE usando:
 - Versão paralela com **OpenMP target (GPU)**;
 - Versão paralela em **CUDA para GPU**.
 
-Os dados são sintéticos: cada execução gera amostras aleatórias com pesos-alvo ocultos.
+Os dados vêm do CSV `data/synthetic_employee_burnout.csv` (mesma base para todas as versões), normalizado em tempo de execução.
 
 ---
 
@@ -87,6 +87,6 @@ Exemplos:
 | OpenMP CPU – 16 threads | 8,30            | 1,98×           |
 | OpenMP CPU – 32 threads | 8,10            | 2,02×           |
 | OpenMP GPU (target)     | 28,04           | 0,59×           |
-| CUDA                    | 1,33            | 12,31×          |
+| CUDA                    | 8,26            | 1,99×           |
 
 Valores completos: `resp/seq.txt`, `resp/omp_cpu*.txt`, `resp/omp_gpu.txt`, `resp/cuda.txt`.

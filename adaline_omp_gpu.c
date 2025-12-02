@@ -45,7 +45,6 @@ void adaline_init(Adaline *m, int n_inputs, float lr)
         m->weights[i] = ((float)rand() / (float)RAND_MAX) * 0.01f;
 }
 
-/* ------------ Predict (host) ------------ */
 static inline float adaline_predict_host(const float *weights, int n_inputs, float bias, const float *x)
 {
     float s = bias;
@@ -54,11 +53,10 @@ static inline float adaline_predict_host(const float *weights, int n_inputs, flo
     return s;
 }
 
-/* ------------ MSE (host, parallel) ------------ */
 float adaline_mse_host(Adaline *m, float **X, float *y, int n_samples)
 {
     double sum = 0.0;
-#pragma omp parallel for reduction(+ : sum)
+    #pragma omp parallel for reduction(+ : sum)
     for (int i = 0; i < n_samples; i++)
     {
         float p = adaline_predict_host(m->weights, m->n_inputs, m->bias, X[i]);
@@ -68,7 +66,6 @@ float adaline_mse_host(Adaline *m, float **X, float *y, int n_samples)
     return (float)(sum / n_samples);
 }
 
-/* ------------ load_dataset (igual ao sequencial) ------------ */
 int load_dataset(const char *filename, float ***X_out, float **y_out, int *n_features)
 {
     FILE *f = fopen(filename, "r");
@@ -158,7 +155,6 @@ int load_dataset(const char *filename, float ***X_out, float **y_out, int *n_fea
     return idx;
 }
 
-/* ------------ normalize (host) ------------ */
 void normalize_dataset(float **X, int n_samples, int n_features)
 {
     for (int j = 0; j < n_features; j++)
@@ -179,49 +175,31 @@ void normalize_dataset(float **X, int n_samples, int n_features)
     }
 }
 
-/* ------------ Train epoch with OpenMP target offload ------------ */
 void adaline_train_epoch_omp_target(Adaline *m, float **X, float *y, int n_samples, int n_teams)
 {
     int n_features = m->n_inputs;
-
-    /* Linearize X for contiguous mapping */
-    float *X_lin = (float *)malloc((size_t)n_samples * n_features * sizeof(float));
-    if (!X_lin)
-    {
-        fprintf(stderr, "malloc fail\n");
-        exit(1);
-    }
+    float *X_lin = malloc((size_t)n_samples * n_features * sizeof(float));
+    // Lineariza X para dado contíguo
     for (int i = 0; i < n_samples; i++)
         for (int j = 0; j < n_features; j++)
             X_lin[(size_t)i * n_features + j] = X[i][j];
 
-    /* allocate grad arrays on host (will be mapped to device) */
-    float *grad_w = (float *)calloc(n_features, sizeof(float));
+    float *grad_w = calloc(n_features, sizeof(float));
     float grad_b = 0.0f;
-    if (!grad_w)
-    {
-        fprintf(stderr, "malloc fail\n");
-        exit(1);
-    }
 
-    /* Copy weights and bias to simple arrays for mapping */
-    float *weights_copy = (float *)malloc(n_features * sizeof(float));
-    if (!weights_copy)
-    {
-        fprintf(stderr, "malloc fail\n");
-        exit(1);
-    }
-    for (int j = 0; j < n_features; j++)
-        weights_copy[j] = m->weights[j];
+    float *weights_copy = malloc(n_features * sizeof(float));
+
+    for(int j = 0; j < n_features; j++)
+        weights_copy[j] = m->weights[j]; //lineariza os pesos
+
     float bias_copy = m->bias;
 
-/* Offload: each work-item processes one sample, accumulates into grad_w/grad_b on device using atomic ops */
-/* Note: atomic updates on grad_w can be slower but are portable. */
-#pragma omp target data map(to : X_lin[0 : (size_t)n_samples * n_features], y[0 : n_samples], weights_copy[0 : n_features], bias_copy) \
+
+    #pragma omp target data \
+    map(to : X_lin[0 : (size_t)n_samples * n_features], y[0 : n_samples], weights_copy[0 : n_features], bias_copy) \
     map(tofrom : grad_w[0 : n_features], grad_b)
     {
-/* distribute work across teams; thread_limit chosen by runtime */
-#pragma omp target teams distribute parallel for thread_limit(256)
+        #pragma omp target teams distribute parallel for thread_limit(256)
         for (int i = 0; i < n_samples; i++)
         {
             float pred = bias_copy;
@@ -231,22 +209,20 @@ void adaline_train_epoch_omp_target(Adaline *m, float **X, float *y, int n_sampl
             }
             float err = y[i] - pred;
 
-/* atomic accumulate bias */
-#pragma omp atomic update
+            #pragma omp atomic update
             grad_b += err;
 
-            /* atomic accumulate each weight gradient */
             for (int j = 0; j < n_features; j++)
             {
                 float v = err * X_lin[(size_t)i * n_features + j];
-#pragma omp atomic update
+                #pragma omp atomic update
                 grad_w[j] += v;
             }
         }
-    } /* end target data */
+    } 
 
-    /* Update weights on host */
     float scale = m->learning_rate / (float)n_samples;
+    
     for (int j = 0; j < n_features; j++)
         m->weights[j] += scale * grad_w[j];
     m->bias += scale * grad_b;
@@ -256,7 +232,6 @@ void adaline_train_epoch_omp_target(Adaline *m, float **X, float *y, int n_sampl
     free(X_lin);
 }
 
-/* ------------ main ------------ */
 int main(int argc, char **argv)
 {
     const char *path = "./data/synthetic_employee_burnout.csv";
