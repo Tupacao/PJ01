@@ -8,10 +8,6 @@
  * Uso:
  *   ./adaline_cuda [dataset.csv] [epochs] [blocksize]
  *
- * Observações:
- * - Lê o mesmo CSV das versões seq/OMP (./data/synthetic_employee_burnout.csv).
- * - Kernel faz redução por bloco em shared para diminuir atomicAdd globais.
- * - Ajuste blocksize conforme a GPU (padrão 256).
  */
 
 #include <stdio.h>

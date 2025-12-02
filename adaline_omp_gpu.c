@@ -8,7 +8,6 @@
  * Se seu toolchain não suportar offload, compile sem targets:
  *   gcc adaline_omp_gpu.c -o adaline_omp_gpu -fopenmp -lm
  *
- * Observação: só o comando clang acima garante realmente offload para GPU NVidia.
  */
 
 #include <stdio.h>

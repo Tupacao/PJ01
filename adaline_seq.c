@@ -5,15 +5,7 @@
  * Instruções de compilação:
  *   gcc adaline_seq.c -o adaline_seq -lm
  *
- * Uso:
- *   ./adaline_seq
  *
- * ---------------------------
- * TEMPOS (preencher após testes):
- * Sequencial: TODO
- * OpenMP (1,2,4,8,16,32): TODO
- * CUDA: TODO
- * ---------------------------
  */
 
 #include <stdio.h>
