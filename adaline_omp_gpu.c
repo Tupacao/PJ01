@@ -35,11 +35,7 @@ void adaline_init(Adaline *m, int n_inputs, float lr)
     m->learning_rate = lr;
     m->bias = 0.0f;
     m->weights = (float *)malloc(n_inputs * sizeof(float));
-    if (!m->weights)
-    {
-        fprintf(stderr, "malloc fail\n");
-        exit(1);
-    }
+    
     srand(1234);
     for (int i = 0; i < n_inputs; i++)
         m->weights[i] = ((float)rand() / (float)RAND_MAX) * 0.01f;
@@ -222,7 +218,7 @@ void adaline_train_epoch_omp_target(Adaline *m, float **X, float *y, int n_sampl
     } 
 
     float scale = m->learning_rate / (float)n_samples;
-    
+
     for (int j = 0; j < n_features; j++)
         m->weights[j] += scale * grad_w[j];
     m->bias += scale * grad_b;

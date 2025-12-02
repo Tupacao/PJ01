@@ -22,8 +22,6 @@
 #include <cuda_runtime.h>
 
 
-
-
 #define MAX_LINE 1024
 
 /* Carrega dataset burnout (mesmo formato das versões seq/OMP) */

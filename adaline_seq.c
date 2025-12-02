@@ -55,6 +55,7 @@ float adaline_predict(Adaline *m, const float *x)
     float s = m->bias;
     for (int i = 0; i < m->n_inputs; i++)
         s += m->weights[i] * x[i];
+        
     return s;
 }
 
